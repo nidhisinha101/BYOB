@@ -27,61 +27,41 @@ const RIPPLE_MEDIUM_MULT = 3.0;
 const TARGET_FPS = 30;
 
 const KEYPOINT_INDICES = {
-  nose: 0,
-  leftEye: 1,
-  rightEye: 2,
-  leftEar: 3,
-  rightEar: 4,
   leftShoulder: 5,
   rightShoulder: 6,
   leftElbow: 7,
   rightElbow: 8,
-  leftWrist: 9,
-  rightWrist: 10,
   leftHip: 11,
   rightHip: 12,
   leftKnee: 13,
   rightKnee: 14,
-  leftAnkle: 15,
-  rightAnkle: 16
 };
 
 let rippleColors = [];
 let vignetteAlpha;
 
-//just track 2 shoulders (or elbows), 2 hips, 2 knees
 const BODY_PART_COLORS = {
-  rightHand: 0,
-  leftHand: 1,
-  rightElbow: 2,
-  leftElbow: 3,
-  nose: 4, //Tushar votes to get rid of nose 
-  rightShoulder: 5,
-  leftShoulder: 6,
-  rightHip: 7,
-  leftHip: 8,
-  rightKnee: 9,
-  leftKnee: 10,
-  rightAnkle: 11,
-  leftAnkle: 12
+  leftShoulder: 0,
+  rightShoulder: 1,
+  leftElbow: 2,
+  rightElbow: 3,
+  leftHip: 4,
+  rightHip: 5,
+  leftKnee: 6,
+  rightKnee: 7,
 };
 
 function initializeRipples() {
   ripples = [];
   const bodyParts = [
-    { name: "rightHand", hue: 190, sat: 100, count: 2 },
-    { name: "leftHand", hue: 320, sat: 100, count: 2 },
-    { name: "rightElbow", hue: 340, sat: 100, count: 2 },
-    { name: "leftElbow", hue: 10, sat: 100, count: 2 },
-    { name: "nose", hue: 45, sat: 100, count: 2 },
-    { name: "rightShoulder", hue: 280, sat: 100, count: 2 },
     { name: "leftShoulder", hue: 180, sat: 100, count: 2 },
+    { name: "rightShoulder", hue: 280, sat: 100, count: 2 },
+    { name: "leftElbow", hue: 10, sat: 100, count: 2 },
+    { name: "rightElbow", hue: 340, sat: 100, count: 2 },
     { name: "rightHip", hue: 160, sat: 100, count: 2 },
     { name: "leftHip", hue: 100, sat: 100, count: 2 },
     { name: "rightKnee", hue: 200, sat: 100, count: 2 },
     { name: "leftKnee", hue: 240, sat: 100, count: 2 },
-    { name: "rightAnkle", hue: 220, sat: 100, count: 2 },
-    { name: "leftAnkle", hue: 260, sat: 100, count: 2 },
   ];
   
   for (let part of bodyParts) {
@@ -112,10 +92,6 @@ function initializeColors() {
     { stroke1: color(180, 100, 55, 200), stroke2: color(180, 100, 70, 130), stroke3: color(180, 100, 85, 80) },
     { stroke1: color(160, 100, 55, 200), stroke2: color(160, 100, 70, 130), stroke3: color(160, 100, 85, 80) },
     { stroke1: color(100, 100, 55, 200), stroke2: color(100, 100, 70, 130), stroke3: color(100, 100, 85, 80) },
-    { stroke1: color(200, 100, 55, 200), stroke2: color(200, 100, 70, 130), stroke3: color(200, 100, 85, 80) },
-    { stroke1: color(240, 100, 55, 200), stroke2: color(240, 100, 70, 130), stroke3: color(240, 100, 85, 80) },
-    { stroke1: color(220, 100, 55, 200), stroke2: color(220, 100, 70, 130), stroke3: color(220, 100, 85, 80) },
-    { stroke1: color(260, 100, 55, 200), stroke2: color(260, 100, 70, 130), stroke3: color(260, 100, 85, 80) },
   ];
   vignetteAlpha = color(10, 5, 20);
 }
@@ -289,19 +265,14 @@ function updateMovement() {
   let CONFIDENCE_THRESHOLD = 0.5;
   
   let movements = {
-    rightHand: 0,
-    leftHand: 0,
     rightElbow: 0,
     leftElbow: 0,
-    nose: 0,
     rightShoulder: 0,
     leftShoulder: 0,
     rightHip: 0,
     leftHip: 0,
     rightKnee: 0,
     leftKnee: 0,
-    rightAnkle: 0,
-    leftAnkle: 0
   };
   
   for (let person of currentFrame.people) {
@@ -313,76 +284,66 @@ function updateMovement() {
     let pose = person.keypoints;
     let prevPose = comparePerson.keypoints;
     
-    if (pose[KEYPOINT_INDICES.rightWrist].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.rightWrist].position.x, pose[KEYPOINT_INDICES.rightWrist].position.y, 
-                      prevPose[KEYPOINT_INDICES.rightWrist].position.x, prevPose[KEYPOINT_INDICES.rightWrist].position.y);
-      movements.rightHand = max(movements.rightHand, move);
+    let p, pp, movement, shuffleBonus;
+
+    p = pose[KEYPOINT_INDICES.rightElbow];
+    pp = prevPose[KEYPOINT_INDICES.rightElbow];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      movements.rightElbow = max(movements.rightElbow, movement);
     }
-    if (pose[KEYPOINT_INDICES.leftWrist].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.leftWrist].position.x, pose[KEYPOINT_INDICES.leftWrist].position.y,
-                      prevPose[KEYPOINT_INDICES.leftWrist].position.x, prevPose[KEYPOINT_INDICES.leftWrist].position.y);
-      movements.leftHand = max(movements.leftHand, move);
+
+    p = pose[KEYPOINT_INDICES.leftElbow];
+    pp = prevPose[KEYPOINT_INDICES.leftElbow];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      movements.leftElbow = max(movements.leftElbow, movement);
     }
-    if (pose[KEYPOINT_INDICES.rightElbow].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.rightElbow].position.x, pose[KEYPOINT_INDICES.rightElbow].position.y,
-                      prevPose[KEYPOINT_INDICES.rightElbow].position.x, prevPose[KEYPOINT_INDICES.rightElbow].position.y);
-      movements.rightElbow = max(movements.rightElbow, move);
+
+    p = pose[KEYPOINT_INDICES.rightShoulder];
+    pp = prevPose[KEYPOINT_INDICES.rightShoulder];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      movements.rightShoulder = max(movements.rightShoulder, movement);
     }
-    if (pose[KEYPOINT_INDICES.leftElbow].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.leftElbow].position.x, pose[KEYPOINT_INDICES.leftElbow].position.y,
-                      prevPose[KEYPOINT_INDICES.leftElbow].position.x, prevPose[KEYPOINT_INDICES.leftElbow].position.y);
-      movements.leftElbow = max(movements.leftElbow, move);
+
+    p = pose[KEYPOINT_INDICES.leftShoulder];
+    pp = prevPose[KEYPOINT_INDICES.leftShoulder];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      movements.leftShoulder = max(movements.leftShoulder, movement);
     }
-    if (pose[KEYPOINT_INDICES.nose].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.nose].position.x, pose[KEYPOINT_INDICES.nose].position.y,
-                      prevPose[KEYPOINT_INDICES.nose].position.x, prevPose[KEYPOINT_INDICES.nose].position.y);
-      movements.nose = max(movements.nose, move);
+
+    p = pose[KEYPOINT_INDICES.rightHip];
+    pp = prevPose[KEYPOINT_INDICES.rightHip];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
+      movements.rightHip = max(movements.rightHip, movement + shuffleBonus);
     }
-    if (pose[KEYPOINT_INDICES.rightShoulder].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.rightShoulder].position.x, pose[KEYPOINT_INDICES.rightShoulder].position.y,
-                      prevPose[KEYPOINT_INDICES.rightShoulder].position.x, prevPose[KEYPOINT_INDICES.rightShoulder].position.y);
-      movements.rightShoulder = max(movements.rightShoulder, move);
+
+    p = pose[KEYPOINT_INDICES.leftHip];
+    pp = prevPose[KEYPOINT_INDICES.leftHip];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
+      movements.leftHip = max(movements.leftHip, movement + shuffleBonus);
     }
-    if (pose[KEYPOINT_INDICES.leftShoulder].score > CONFIDENCE_THRESHOLD) {
-      let move = dist(pose[KEYPOINT_INDICES.leftShoulder].position.x, pose[KEYPOINT_INDICES.leftShoulder].position.y,
-                      prevPose[KEYPOINT_INDICES.leftShoulder].position.x, prevPose[KEYPOINT_INDICES.leftShoulder].position.y);
-      movements.leftShoulder = max(movements.leftShoulder, move);
+
+    p = pose[KEYPOINT_INDICES.rightKnee];
+    pp = prevPose[KEYPOINT_INDICES.rightKnee];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
+      movements.rightKnee = max(movements.rightKnee, movement + shuffleBonus);
     }
-    if (pose[KEYPOINT_INDICES.rightHip].score > CONFIDENCE_THRESHOLD) {
-      let hipMove = dist(pose[KEYPOINT_INDICES.rightHip].position.x, pose[KEYPOINT_INDICES.rightHip].position.y,
-                        prevPose[KEYPOINT_INDICES.rightHip].position.x, prevPose[KEYPOINT_INDICES.rightHip].position.y);
-      let shuffleBonus = abs(pose[KEYPOINT_INDICES.rightHip].position.x - prevPose[KEYPOINT_INDICES.rightHip].position.x) * 1.5;
-      movements.rightHip = max(movements.rightHip, hipMove + shuffleBonus);
-    }
-    if (pose[KEYPOINT_INDICES.leftHip].score > CONFIDENCE_THRESHOLD) {
-      let hipMove = dist(pose[KEYPOINT_INDICES.leftHip].position.x, pose[KEYPOINT_INDICES.leftHip].position.y,
-                        prevPose[KEYPOINT_INDICES.leftHip].position.x, prevPose[KEYPOINT_INDICES.leftHip].position.y);
-      let shuffleBonus = abs(pose[KEYPOINT_INDICES.leftHip].position.x - prevPose[KEYPOINT_INDICES.leftHip].position.x) * 1.5;
-      movements.leftHip = max(movements.leftHip, hipMove + shuffleBonus);
-    }
-    if (pose[KEYPOINT_INDICES.rightKnee].score > CONFIDENCE_THRESHOLD) {
-      let kneeMove = dist(pose[KEYPOINT_INDICES.rightKnee].position.x, pose[KEYPOINT_INDICES.rightKnee].position.y,
-                          prevPose[KEYPOINT_INDICES.rightKnee].position.x, prevPose[KEYPOINT_INDICES.rightKnee].position.y);
-      let shuffleBonus = abs(pose[KEYPOINT_INDICES.rightKnee].position.x - prevPose[KEYPOINT_INDICES.rightKnee].position.x) * 1.5;
-      movements.rightKnee = max(movements.rightKnee, kneeMove + shuffleBonus);
-    }
-    if (pose[KEYPOINT_INDICES.leftKnee].score > CONFIDENCE_THRESHOLD) {
-      let kneeMove = dist(pose[KEYPOINT_INDICES.leftKnee].position.x, pose[KEYPOINT_INDICES.leftKnee].position.y,
-                          prevPose[KEYPOINT_INDICES.leftKnee].position.x, prevPose[KEYPOINT_INDICES.leftKnee].position.y);
-      let shuffleBonus = abs(pose[KEYPOINT_INDICES.leftKnee].position.x - prevPose[KEYPOINT_INDICES.leftKnee].position.x) * 1.5;
-      movements.leftKnee = max(movements.leftKnee, kneeMove + shuffleBonus);
-    }
-    if (pose[KEYPOINT_INDICES.rightAnkle].score > CONFIDENCE_THRESHOLD) {
-      let ankleMove = dist(pose[KEYPOINT_INDICES.rightAnkle].position.x, pose[KEYPOINT_INDICES.rightAnkle].position.y,
-                            prevPose[KEYPOINT_INDICES.rightAnkle].position.x, prevPose[KEYPOINT_INDICES.rightAnkle].position.y);
-      let shuffleBonus = abs(pose[KEYPOINT_INDICES.rightAnkle].position.x - prevPose[KEYPOINT_INDICES.rightAnkle].position.x) * 1.5;
-      movements.rightAnkle = max(movements.rightAnkle, ankleMove + shuffleBonus);
-    }
-    if (pose[KEYPOINT_INDICES.leftAnkle].score > CONFIDENCE_THRESHOLD) {
-      let ankleMove = dist(pose[KEYPOINT_INDICES.leftAnkle].position.x, pose[KEYPOINT_INDICES.leftAnkle].position.y,
-                            prevPose[KEYPOINT_INDICES.leftAnkle].position.x, prevPose[KEYPOINT_INDICES.leftAnkle].position.y);
-      let shuffleBonus = abs(pose[KEYPOINT_INDICES.leftAnkle].position.x - prevPose[KEYPOINT_INDICES.leftAnkle].position.x) * 1.5;
-      movements.leftAnkle = max(movements.leftAnkle, ankleMove + shuffleBonus);
+
+    p = pose[KEYPOINT_INDICES.leftKnee];
+    pp = prevPose[KEYPOINT_INDICES.leftKnee];
+    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
+      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
+      movements.leftKnee = max(movements.leftKnee, movement + shuffleBonus);
     }
   }
   
@@ -415,6 +376,8 @@ function drawRipples() {
   for (let ripple of ripples) {
     let colorIndex = BODY_PART_COLORS[ripple.bodyPart];
     let colors = rippleColors[colorIndex];
+    if (!colors) continue;
+
     let r = ripple.currentRadius;
     
     stroke(colors.stroke1);
