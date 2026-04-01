@@ -18,11 +18,15 @@ const MIN_SIZE = 2;
 const MAX_SIZE = 150;
 const RIPPLE_MIN = 20;
 const RIPPLE_MAX = 100;
-const MOVEMENT_THRESHOLD = 75;
-const MOVEMENT_MEDIUM = 150;
-const MOVEMENT_FAST = 300;
+const MOVEMENT_THRESHOLD = 1;
+const MOVEMENT_GROOVING = 1.5;
 const RIPPLE_SMALL_MULT = 1.5;
 const RIPPLE_MEDIUM_MULT = 3.0;
+
+const REWARD_SUSTAIN_THRESHOLD = 5;
+const SPARKLE_THRESHOLD = 7;
+const CONFETTI_SPAWN_INTERVAL = 300;
+const SPARKLE_SPAWN_INTERVAL = 300;
 
 const TARGET_FPS = 30;
 
@@ -40,11 +44,36 @@ const KEYPOINT_INDICES = {
 let rippleColors = [];
 let vignetteAlpha;
 
+let rewardState = {
+  currentIntensity: 'idle',
+  sustainedTime: 0,
+  lastIntensity: 'idle',
+  rewardTriggered: false,
+  rewardType: null,
+  rewardTimer: 0,
+};
+
+let confetti = [];
+let sparkleBursts = [];
+
+const CONFETTI_COLORS = [
+  { h: 45, s: 100, l: 60 },
+  { h: 280, s: 100, l: 60 },
+  { h: 180, s: 100, l: 50 },
+  { h: 340, s: 100, l: 60 },
+  { h: 10, s: 100, l: 55 },
+  { h: 200, s: 100, l: 55 },
+];
+
+let lastConfettiSpawn = 0;
+let lastSparkleSpawn = 0;
+let accumulatedGrooveTime = 0;
+
 const BODY_PART_COLORS = {
   leftShoulder: 0,
   rightShoulder: 1,
-  leftElbow: 2,
-  rightElbow: 3,
+  leftWrist: 2,
+  rightWrist: 3,
   leftHip: 4,
   rightHip: 5,
   leftKnee: 6,
@@ -56,8 +85,8 @@ function initializeRipples() {
   const bodyParts = [
     { name: "leftShoulder", hue: 180, sat: 100, count: 2 },
     { name: "rightShoulder", hue: 280, sat: 100, count: 2 },
-    { name: "leftElbow", hue: 10, sat: 100, count: 2 },
-    { name: "rightElbow", hue: 340, sat: 100, count: 2 },
+    { name: "leftWrist", hue: 10, sat: 100, count: 2 },
+    { name: "rightWrist", hue: 340, sat: 100, count: 2 },
     { name: "rightHip", hue: 160, sat: 100, count: 2 },
     { name: "leftHip", hue: 100, sat: 100, count: 2 },
     { name: "rightKnee", hue: 200, sat: 100, count: 2 },
@@ -115,20 +144,6 @@ function setup() {
     colorMode(HSL);
     initializeRipples();
     initializeColors();
-    
-    song = loadSound('music3.mp3');
-    const playButton = createButton('Get your groove on');
-    playButton.parent('controls');
-    playButton.addClass('play-button');
-    playButton.mousePressed(() => {
-      if (song.isPlaying()) {
-        song.pause();
-        playButton.html('Get your groove on');
-      } else {
-        song.loop();
-        playButton.html('Pause the party');
-      }
-    });
 
     poseNet = ml5.poseNet(videoSmall, { maxPoseDetections: 5 }, modelReady);
     poseNet.on('pose', function (results) {
@@ -216,6 +231,10 @@ function draw() {
     updateRipples();
     drawRipples();
     updateMovement();
+    updateConfetti();
+    updateSparkleBursts();
+    drawConfetti();
+    drawSparkleBursts();
     cleanupMemory();
 }
 
@@ -258,15 +277,15 @@ function updateMovement() {
   if (pastPoses.length < 5) return;
   
   let currentFrame = pastPoses[pastPoses.length - 1];
-  let compareFrame = pastPoses[max(0, pastPoses.length - 10)];
+  let compareFrame = pastPoses[max(0, pastPoses.length - 3)];
   
   if (!currentFrame || !compareFrame || currentFrame.people.length === 0) return;
   
   let CONFIDENCE_THRESHOLD = 0.5;
   
   let movements = {
-    rightElbow: 0,
-    leftElbow: 0,
+    rightWrist: 0,
+    leftWrist: 0,
     rightShoulder: 0,
     leftShoulder: 0,
     rightHip: 0,
@@ -286,18 +305,18 @@ function updateMovement() {
     
     let p, pp, movement, shuffleBonus;
 
-    p = pose[KEYPOINT_INDICES.rightElbow];
-    pp = prevPose[KEYPOINT_INDICES.rightElbow];
+    p = pose[KEYPOINT_INDICES.rightWrist];
+    pp = prevPose[KEYPOINT_INDICES.rightWrist];
     if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
       movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      movements.rightElbow = max(movements.rightElbow, movement);
+      movements.rightWrist = max(movements.rightWrist, movement);
     }
 
-    p = pose[KEYPOINT_INDICES.leftElbow];
-    pp = prevPose[KEYPOINT_INDICES.leftElbow];
+    p = pose[KEYPOINT_INDICES.leftWrist];
+    pp = prevPose[KEYPOINT_INDICES.leftWrist];
     if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
       movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      movements.leftElbow = max(movements.leftElbow, movement);
+      movements.leftWrist = max(movements.leftWrist, movement);
     }
 
     p = pose[KEYPOINT_INDICES.rightShoulder];
@@ -353,10 +372,8 @@ function updateMovement() {
     if (movement > MOVEMENT_THRESHOLD) {
       let newSize;
       
-      if (movement < MOVEMENT_MEDIUM) {
-        newSize = map(movement, MOVEMENT_THRESHOLD, MOVEMENT_MEDIUM, RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MIN * RIPPLE_MEDIUM_MULT);
-      } else if (movement < MOVEMENT_FAST) {
-        newSize = map(movement, MOVEMENT_MEDIUM, MOVEMENT_FAST, RIPPLE_MIN * RIPPLE_MEDIUM_MULT, RIPPLE_MAX);
+      if (movement < MOVEMENT_GROOVING) {
+        newSize = map(movement, MOVEMENT_THRESHOLD, MOVEMENT_GROOVING, RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MIN * RIPPLE_MEDIUM_MULT);
       } else {
         newSize = RIPPLE_MAX;
       }
@@ -368,6 +385,7 @@ function updateMovement() {
       }
     }
   }
+  updateRewardSystem(movements);
 }
 
 function drawRipples() {
@@ -396,5 +414,178 @@ function drawRipples() {
   
   blendMode(BLEND);
 }
+ 
+function getCurrentMovementIntensity(movements) {
+  let maxMovement = 0;
+  
+  for (let part in movements) {
+    if (movements[part] > maxMovement) {
+      maxMovement = movements[part];
+    }
+  }
+  
+  if (maxMovement >= MOVEMENT_GROOVING) {
+    return 'grooving';
+  } else if (maxMovement >= MOVEMENT_THRESHOLD) {
+    return 'bare_minimum';
+  }
+  return 'idle';
+}
 
+function updateRewardSystem(movements) {
+  let currentIntensity = getCurrentMovementIntensity(movements);
+  
+  if (currentIntensity === rewardState.lastIntensity) {
+    rewardState.sustainedTime += 1 / TARGET_FPS;
+  } else {
+    rewardState.sustainedTime = 0;
+  }
+  
+  rewardState.lastIntensity = currentIntensity;
+  rewardState.currentIntensity = currentIntensity;
+  
+  if (currentIntensity === 'grooving') {
+    accumulatedGrooveTime += 1 / TARGET_FPS;
+    rewardState.rewardTriggered = true;
+    rewardState.rewardType = 'grooving';
+    spawnRewardEffects();
+  } else {
+    accumulatedGrooveTime = 0;
+    rewardState.rewardTriggered = false;
+    rewardState.rewardType = null;
+    confetti = [];
+    sparkleBursts = [];
+  }
+}
 
+function spawnRewardEffects() {
+  let now = millis();
+  
+  if (accumulatedGrooveTime >= REWARD_SUSTAIN_THRESHOLD) {
+    if (now - lastConfettiSpawn > CONFETTI_SPAWN_INTERVAL) {
+      spawnConfetti(4);
+      lastConfettiSpawn = now;
+    }
+  }
+  
+  if (accumulatedGrooveTime >= SPARKLE_THRESHOLD) {
+    if (now - lastSparkleSpawn > SPARKLE_SPAWN_INTERVAL) {
+      spawnSparkleBurst();
+      lastSparkleSpawn = now;
+    }
+  }
+}
+
+function spawnConfetti(count) {
+  for (let i = 0; i < count; i++) {
+    let col = random(CONFETTI_COLORS);
+    confetti.push({
+      x: random(width),
+      y: -20,
+      size: random(8, 16),
+      rotation: random(TWO_PI),
+      rotationSpeed: random(-0.2, 0.2),
+      vx: random(-1, 1),
+      vy: random(2, 5),
+      h: col.h,
+      s: col.s,
+      l: col.l,
+      lifetime: random(3, 5),
+      age: 0,
+    });
+  }
+}
+
+function spawnSparkleBurst() {
+  let centerX = random(width * 0.2, width * 0.8);
+  let centerY = random(height * 0.2, height * 0.7);
+  let particleCount = floor(random(8, 15));
+  let col = random(CONFETTI_COLORS);
+  
+  for (let i = 0; i < particleCount; i++) {
+    let angle = random(TWO_PI);
+    let speed = random(2, 6);
+    sparkleBursts.push({
+      x: centerX,
+      y: centerY,
+      vx: cos(angle) * speed,
+      vy: sin(angle) * speed,
+      size: random(4, 10),
+      h: col.h,
+      s: col.s,
+      l: col.l,
+      lifetime: random(0.8, 1.5),
+      age: 0,
+    });
+  }
+}
+
+function updateConfetti() {
+  for (let i = confetti.length - 1; i >= 0; i--) {
+    let c = confetti[i];
+    c.x += c.vx + sin(frameCount * 0.05 + i) * 0.5;
+    c.y += c.vy;
+    c.rotation += c.rotationSpeed;
+    c.age += 1 / TARGET_FPS;
+    
+    if (c.age > c.lifetime || c.y > height + 50) {
+      confetti.splice(i, 1);
+    }
+  }
+}
+
+function updateSparkleBursts() {
+  for (let i = sparkleBursts.length - 1; i >= 0; i--) {
+    let s = sparkleBursts[i];
+    s.x += s.vx;
+    s.y += s.vy;
+    s.vx *= 0.95;
+    s.vy *= 0.95;
+    s.age += 1 / TARGET_FPS;
+    
+    if (s.age > s.lifetime) {
+      sparkleBursts.splice(i, 1);
+    }
+  }
+}
+
+function drawConfetti() {
+  for (let c of confetti) {
+    let fadeAlpha = 1;
+    if (c.age > c.lifetime - 1) {
+      fadeAlpha = (c.lifetime - c.age);
+    }
+    
+    push();
+    translate(c.x, c.y);
+    rotate(c.rotation);
+    noStroke();
+    fill(c.h, c.s, c.l, fadeAlpha * 255);
+    rectMode(CENTER);
+    rect(0, 0, c.size, c.size * 0.6);
+    pop();
+  }
+}
+
+function drawSparkleBursts() {
+  for (let s of sparkleBursts) {
+    let fadeAlpha = 1;
+    if (s.age > s.lifetime - 0.3) {
+      fadeAlpha = (s.lifetime - s.age) / 0.3;
+    }
+    
+    push();
+    noStroke();
+    fill(s.h, s.s, s.l, fadeAlpha * 255);
+    translate(s.x, s.y);
+    
+    for (let i = 0; i < 4; i++) {
+      let angle = TWO_PI / 4 * i;
+      push();
+      rotate(angle);
+      ellipse(0, -s.size / 2, s.size * 0.2, s.size);
+      pop();
+    }
+    pop();
+  }
+}

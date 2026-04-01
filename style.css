@@ -35,37 +35,3 @@ html, body {
   transform: translateX(-50%);
   z-index: 100;
 }
-
-.play-button {
-  background: linear-gradient(135deg, #ff00ff, #00ffff);
-  color: #000;
-  font-weight: bold;
-  padding: 12px 24px;
-  font-size: 18px;
-  border-radius: 30px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  cursor: pointer;
-  font-family: Arial, sans-serif;
-  opacity: 0.7;
-  transition: all 0.3s;
-  box-shadow: 0 0 20px rgba(255, 0, 255, 0.5), 0 0 40px rgba(0, 255, 255, 0.3);
-}
-
-.play-button:hover {
-  opacity: 1;
-  box-shadow: 0 0 30px rgba(255, 0, 255, 0.8), 0 0 60px rgba(0, 255, 255, 0.5);
-  transform: scale(1.05);
-}
-
-#instructions {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: white;
-  font-family: Arial, sans-serif;
-  font-size: 24px;
-  text-align: center;
-  pointer-events: none;
-  opacity: 0.8;
-}
