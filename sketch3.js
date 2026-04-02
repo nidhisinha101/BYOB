@@ -18,10 +18,10 @@ const MIN_SIZE = 2;
 const MAX_SIZE = 150;
 const RIPPLE_MIN = 20;
 const RIPPLE_MAX = 350;
-const MOVEMENT_THRESHOLD = 3;
-const MOVEMENT_GROOVING = 20;
-const RIPPLE_SMALL_MULT = 2;
-const RIPPLE_MEDIUM_MULT = 5.0;
+const MOVEMENT_THRESHOLD = 8;   // ignore micro-movements, fidgeting, nose touches
+const MOVEMENT_GROOVING = 35;   // real dancing threshold — full-arm swings, body shifts
+const RIPPLE_SMALL_MULT = 1.5;  // small movement → modest ripple
+const RIPPLE_MEDIUM_MULT = 4.0;
 
 const REWARD_SUSTAIN_THRESHOLD = 5;
 const SPARKLE_THRESHOLD = 7;
@@ -308,11 +308,11 @@ function drawVignette() {
 }
 
 function updateRipples() {
-  // Compute screen centroid of all high-confidence ripples for lost-joint fallback
+  // Compute centroid of visible joints for lost-joint fallback
   let centroidX = width / 2, centroidY = height * 0.45;
   let confidentCount = 0;
   for (let r of ripples) {
-    if (r.confidence > 0.3) {
+    if (r.confidence > 0.25) {
       centroidX += r.targetX;
       centroidY += r.targetY;
       confidentCount++;
@@ -324,25 +324,28 @@ function updateRipples() {
   }
 
   for (let ripple of ripples) {
-    if (ripple.confidence > 0.15) {
-      // Joint is visible — snap tightly toward it
-      let posLerp = map(ripple.confidence, 0.15, 1, 0.05, 0.2);
+    // Hard visibility cutoff — below this, the ripple is effectively hidden
+    ripple.visible = ripple.confidence > 0.15;
+
+    if (ripple.visible) {
+      let posLerp = map(ripple.confidence, 0.15, 1, 0.06, 0.22);
       ripple.x = lerp(ripple.x, ripple.targetX, posLerp);
       ripple.y = lerp(ripple.y, ripple.targetY, posLerp);
     } else {
-      // Joint is lost — drift toward the body centroid so it doesn't sit stranded
-      ripple.x = lerp(ripple.x, centroidX, 0.02);
-      ripple.y = lerp(ripple.y, centroidY, 0.02);
-      // Also shrink it toward minimum so a lost joint doesn't loom large
-      ripple.targetRadius = lerp(ripple.targetRadius, RIPPLE_MIN, 0.05);
+      // Pull quickly to centroid so if it becomes visible again it's near the body
+      ripple.x = lerp(ripple.x, centroidX, 0.12);
+      ripple.y = lerp(ripple.y, centroidY, 0.12);
+      // Collapse radius to zero so it won't pop large when joint reappears
+      ripple.targetRadius = RIPPLE_MIN;
+      ripple.currentRadius = lerp(ripple.currentRadius, 0, 0.15);
     }
 
-    // Ambient idle pulse so screen is never fully dead
-    let pulse = sin(frameCount * 0.04 + ripple.hue * 0.05) * 3;
-
-    ripple.currentRadius = lerp(ripple.currentRadius, ripple.targetRadius + pulse, 0.15);
-    ripple.targetRadius *= 0.96;
-    ripple.targetRadius = max(ripple.targetRadius, RIPPLE_MIN);
+    if (ripple.visible) {
+      let pulse = sin(frameCount * 0.04 + ripple.hue * 0.05) * 3;
+      ripple.currentRadius = lerp(ripple.currentRadius, ripple.targetRadius + pulse, 0.15);
+      ripple.targetRadius *= 0.96;
+      ripple.targetRadius = max(ripple.targetRadius, RIPPLE_MIN);
+    }
   }
 }
 
@@ -422,27 +425,21 @@ function updateMovement() {
       ripple.targetY    = jointPositions[part].y;
       ripple.confidence = jointConfidence[part];
     } else {
-      ripple.confidence *= 0.9; // decay confidence when joint goes missing
+      ripple.confidence *= 0.75; // fast decay: joint gone for ~10 frames = invisible
     }
 
     let movement = movements[part];
 
     if (movement > MOVEMENT_THRESHOLD) {
-      let newSize;
-      if (movement < MOVEMENT_GROOVING) {
-        newSize = map(movement, MOVEMENT_THRESHOLD, MOVEMENT_GROOVING,
-                      RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MIN * RIPPLE_MEDIUM_MULT);
-      } else {
-        newSize = map(movement, MOVEMENT_GROOVING, MOVEMENT_GROOVING * 3,
-                      RIPPLE_MIN * RIPPLE_MEDIUM_MULT, RIPPLE_MAX);
-        newSize = constrain(newSize, RIPPLE_MIN, RIPPLE_MAX);
-      }
-      // Flow energy adds a small bonus on top of real movement — amplifies without faking
-      let flowBonus = map(flowEnergy, 0, 1, 0, RIPPLE_MIN * 2);
-      newSize = min(newSize + flowBonus, RIPPLE_MAX);
+      // Exponential curve: small movements stay small, big dancing moves explode
+      // Normalize 0–1 across the full range then square it for non-linearity
+      let t = constrain((movement - MOVEMENT_THRESHOLD) / (MOVEMENT_GROOVING * 3 - MOVEMENT_THRESHOLD), 0, 1);
+      let tCurved = t * t * t; // cubic — tiny moves barely register, full-body = huge
+      let newSize = map(tCurved, 0, 1, RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MAX);
+
       if (newSize > ripple.targetRadius) ripple.targetRadius = newSize;
     }
-    // No flow fallback when still — prevents noise from growing ripples unprompted
+    // No flow-based growth when still — prevents noise triggering ripples unprompted
   }
 
   updateRewardSystem(movements);
@@ -453,22 +450,28 @@ function drawRipples() {
   blendMode(ADD);
   
   for (let ripple of ripples) {
+    if (!ripple.visible || ripple.currentRadius < 2) continue;
+
     let colorIndex = BODY_PART_COLORS[ripple.bodyPart];
     let colors = rippleColors[colorIndex];
     if (!colors) continue;
 
+    // Fade alpha based on confidence so low-confidence joints ghost out smoothly
+    let alpha = map(ripple.confidence, 0.15, 0.6, 60, 255);
+    alpha = constrain(alpha, 0, 255);
+
     let r = ripple.currentRadius;
-    
-    stroke(colors.stroke1);
+
+    stroke(hue(colors.stroke1), saturation(colors.stroke1), lightness(colors.stroke1), alpha);
     strokeWeight(8);
     noFill();
     ellipse(ripple.x, ripple.y, r * 2, r * 2);
-    
-    stroke(colors.stroke2);
+
+    stroke(hue(colors.stroke2), saturation(colors.stroke2), lightness(colors.stroke2), alpha * 0.65);
     strokeWeight(5);
     ellipse(ripple.x, ripple.y, r * 1.7, r * 1.7);
-    
-    stroke(colors.stroke3);
+
+    stroke(hue(colors.stroke3), saturation(colors.stroke3), lightness(colors.stroke3), alpha * 0.4);
     strokeWeight(3);
     ellipse(ripple.x, ripple.y, r * 1.4, r * 1.4);
   }
