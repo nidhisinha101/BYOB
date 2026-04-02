@@ -196,9 +196,9 @@ const CLEANUP_INTERVAL = 60000;
 let flowCanvas, flowCtx;
 let prevPixels = null;
 let flowEnergy = 0;
-const FLOW_DECAY = 0.85;
-const FLOW_THRESHOLD = 15;   // per-channel pixel diff to count as movement
-const FLOW_SCALE = 0.003;    // how strongly flow energy drives ripple size
+const FLOW_DECAY = 0.80;
+const FLOW_THRESHOLD = 35;   // raised to ignore camera noise/grain in dark environments
+const FLOW_SCALE = 0.0015;   // reduced so flow only nudges, not grows ripples on its own
 
 function computeOpticalFlow() {
   if (!flowCtx || !video.elt) return;
@@ -308,14 +308,36 @@ function drawVignette() {
 }
 
 function updateRipples() {
-  for (let ripple of ripples) {
-    // Snap toward the actual joint position.
-    // High confidence = tight tracking. Low confidence = slow drift.
-    let posLerp = map(ripple.confidence, 0, 1, 0.04, 0.18);
-    ripple.x = lerp(ripple.x, ripple.targetX, posLerp);
-    ripple.y = lerp(ripple.y, ripple.targetY, posLerp);
+  // Compute screen centroid of all high-confidence ripples for lost-joint fallback
+  let centroidX = width / 2, centroidY = height * 0.45;
+  let confidentCount = 0;
+  for (let r of ripples) {
+    if (r.confidence > 0.3) {
+      centroidX += r.targetX;
+      centroidY += r.targetY;
+      confidentCount++;
+    }
+  }
+  if (confidentCount > 0) {
+    centroidX /= confidentCount + 1;
+    centroidY /= confidentCount + 1;
+  }
 
-    // Ambient idle pulse so screen is never dead
+  for (let ripple of ripples) {
+    if (ripple.confidence > 0.15) {
+      // Joint is visible — snap tightly toward it
+      let posLerp = map(ripple.confidence, 0.15, 1, 0.05, 0.2);
+      ripple.x = lerp(ripple.x, ripple.targetX, posLerp);
+      ripple.y = lerp(ripple.y, ripple.targetY, posLerp);
+    } else {
+      // Joint is lost — drift toward the body centroid so it doesn't sit stranded
+      ripple.x = lerp(ripple.x, centroidX, 0.02);
+      ripple.y = lerp(ripple.y, centroidY, 0.02);
+      // Also shrink it toward minimum so a lost joint doesn't loom large
+      ripple.targetRadius = lerp(ripple.targetRadius, RIPPLE_MIN, 0.05);
+    }
+
+    // Ambient idle pulse so screen is never fully dead
     let pulse = sin(frameCount * 0.04 + ripple.hue * 0.05) * 3;
 
     ripple.currentRadius = lerp(ripple.currentRadius, ripple.targetRadius + pulse, 0.15);
@@ -404,7 +426,6 @@ function updateMovement() {
     }
 
     let movement = movements[part];
-    let flowFloor = map(flowEnergy, 0, 1, RIPPLE_MIN, RIPPLE_MIN * 4);
 
     if (movement > MOVEMENT_THRESHOLD) {
       let newSize;
@@ -416,10 +437,12 @@ function updateMovement() {
                       RIPPLE_MIN * RIPPLE_MEDIUM_MULT, RIPPLE_MAX);
         newSize = constrain(newSize, RIPPLE_MIN, RIPPLE_MAX);
       }
+      // Flow energy adds a small bonus on top of real movement — amplifies without faking
+      let flowBonus = map(flowEnergy, 0, 1, 0, RIPPLE_MIN * 2);
+      newSize = min(newSize + flowBonus, RIPPLE_MAX);
       if (newSize > ripple.targetRadius) ripple.targetRadius = newSize;
-    } else {
-      if (flowFloor > ripple.targetRadius) ripple.targetRadius = flowFloor;
     }
+    // No flow fallback when still — prevents noise from growing ripples unprompted
   }
 
   updateRewardSystem(movements);
