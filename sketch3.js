@@ -17,11 +17,11 @@ let videoScaleY = 1;
 const MIN_SIZE = 2;
 const MAX_SIZE = 150;
 const RIPPLE_MIN = 20;
-const RIPPLE_MAX = 100;
-const MOVEMENT_THRESHOLD = 1;
-const MOVEMENT_GROOVING = 1.5;
-const RIPPLE_SMALL_MULT = 1.5;
-const RIPPLE_MEDIUM_MULT = 3.0;
+const RIPPLE_MAX = 350;
+const MOVEMENT_THRESHOLD = 3;
+const MOVEMENT_GROOVING = 20;
+const RIPPLE_SMALL_MULT = 2;
+const RIPPLE_MEDIUM_MULT = 5.0;
 
 const REWARD_SUSTAIN_THRESHOLD = 5;
 const SPARKLE_THRESHOLD = 7;
@@ -31,10 +31,13 @@ const SPARKLE_SPAWN_INTERVAL = 300;
 const TARGET_FPS = 30;
 
 const KEYPOINT_INDICES = {
+  nose: 0,
   leftShoulder: 5,
   rightShoulder: 6,
   leftElbow: 7,
   rightElbow: 8,
+  leftWrist: 9,
+  rightWrist: 10,
   leftHip: 11,
   rightHip: 12,
   leftKnee: 13,
@@ -83,30 +86,29 @@ const BODY_PART_COLORS = {
 function initializeRipples() {
   ripples = [];
   const bodyParts = [
-    { name: "leftShoulder", hue: 180, sat: 100, count: 2 },
-    { name: "rightShoulder", hue: 280, sat: 100, count: 2 },
-    { name: "leftWrist", hue: 10, sat: 100, count: 2 },
-    { name: "rightWrist", hue: 340, sat: 100, count: 2 },
-    { name: "rightHip", hue: 160, sat: 100, count: 2 },
-    { name: "leftHip", hue: 100, sat: 100, count: 2 },
-    { name: "rightKnee", hue: 200, sat: 100, count: 2 },
-    { name: "leftKnee", hue: 240, sat: 100, count: 2 },
+    { name: "leftShoulder",  hue: 180, sat: 100 },
+    { name: "rightShoulder", hue: 280, sat: 100 },
+    { name: "leftWrist",     hue: 10,  sat: 100 },
+    { name: "rightWrist",    hue: 340, sat: 100 },
+    { name: "rightHip",      hue: 160, sat: 100 },
+    { name: "leftHip",       hue: 100, sat: 100 },
+    { name: "rightKnee",     hue: 200, sat: 100 },
+    { name: "leftKnee",      hue: 240, sat: 100 },
   ];
-  
+
   for (let part of bodyParts) {
-    for (let i = 0; i < part.count; i++) {
-      ripples.push({
-        x: random(100, width - 100),
-        y: random(100, height - 100),
-        vx: random(-bounceSpeed, bounceSpeed),
-        vy: random(-bounceSpeed, bounceSpeed),
-        currentRadius: RIPPLE_MIN,
-        targetRadius: RIPPLE_MIN,
-        hue: part.hue,
-        saturation: part.sat,
-        bodyPart: part.name
-      });
-    }
+    ripples.push({
+      x: width / 2,
+      y: height / 2,
+      targetX: width / 2,   // where the joint actually is on screen
+      targetY: height / 2,
+      currentRadius: RIPPLE_MIN,
+      targetRadius: RIPPLE_MIN,
+      hue: part.hue,
+      saturation: part.sat,
+      bodyPart: part.name,
+      confidence: 0,        // last known confidence for this joint
+    });
   }
 }
 
@@ -306,150 +308,123 @@ function drawVignette() {
 }
 
 function updateRipples() {
-  const margin = 50;
-  
   for (let ripple of ripples) {
-    ripple.x += ripple.vx;
-    ripple.y += ripple.vy;
-    
-    if (ripple.x < margin || ripple.x > width - margin) {
-      ripple.vx *= -1;
-      ripple.x = constrain(ripple.x, margin, width - margin);
-    }
-    if (ripple.y < margin || ripple.y > height - margin) {
-      ripple.vy *= -1;
-      ripple.y = constrain(ripple.y, margin, height - margin);
-    }
-    
-    ripple.currentRadius = lerp(ripple.currentRadius, ripple.targetRadius, 0.15);
-    ripple.targetRadius *= 0.97;
+    // Snap toward the actual joint position.
+    // High confidence = tight tracking. Low confidence = slow drift.
+    let posLerp = map(ripple.confidence, 0, 1, 0.04, 0.18);
+    ripple.x = lerp(ripple.x, ripple.targetX, posLerp);
+    ripple.y = lerp(ripple.y, ripple.targetY, posLerp);
+
+    // Ambient idle pulse so screen is never dead
+    let pulse = sin(frameCount * 0.04 + ripple.hue * 0.05) * 3;
+
+    ripple.currentRadius = lerp(ripple.currentRadius, ripple.targetRadius + pulse, 0.15);
+    ripple.targetRadius *= 0.96;
     ripple.targetRadius = max(ripple.targetRadius, RIPPLE_MIN);
   }
 }
 
 function updateMovement() {
   if (pastPoses.length < 5) return;
-  
+
   let currentFrame = pastPoses[pastPoses.length - 1];
   let compareFrame = pastPoses[max(0, pastPoses.length - 3)];
-  
+
   if (!currentFrame || !compareFrame || currentFrame.people.length === 0) return;
-  
+
   let CONFIDENCE_THRESHOLD = 0.25;
-  
+
+  // movements: pixel distance traveled since compareFrame
   let movements = {
-    rightWrist: 0,
-    leftWrist: 0,
-    rightShoulder: 0,
-    leftShoulder: 0,
-    rightHip: 0,
-    leftHip: 0,
-    rightKnee: 0,
-    leftKnee: 0,
+    rightWrist: 0, leftWrist: 0,
+    rightShoulder: 0, leftShoulder: 0,
+    rightHip: 0, leftHip: 0,
+    rightKnee: 0, leftKnee: 0,
   };
-  
+
+  // jointPositions: best screen-space position for each joint this frame
+  let jointPositions = {};
+  let jointConfidence = {};
+
   for (let person of currentFrame.people) {
     let personId = person.id;
     let comparePerson = compareFrame.people.find(p => p.id === personId);
-    
     if (!comparePerson) continue;
-    
+
     let pose = person.keypoints;
     let prevPose = comparePerson.keypoints;
-    
-    let p, pp, movement, shuffleBonus;
 
-    p = pose[KEYPOINT_INDICES.rightWrist];
-    pp = prevPose[KEYPOINT_INDICES.rightWrist];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      movements.rightWrist = max(movements.rightWrist, movement);
+    function processJoint(name, idx, shuffleAxis) {
+      let p  = pose[idx];
+      let pp = prevPose[idx];
+      if (!p || !pp || p.score < CONFIDENCE_THRESHOLD) return;
+
+      // Keypoints come from the 320x240 videoSmall, scaled *2 in the pose handler = 640x480 space.
+      // The video is CSS-mirrored, so we flip x relative to the 640 width.
+      let rawX = 640 - p.position.x;
+      let rawY = p.position.y;
+
+      // Map from video space to canvas space using the offsets computed in draw()
+      let screenX = videoOffsetX + rawX * videoScaleX;
+      let screenY = videoOffsetY + rawY * videoScaleY;
+
+      let movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
+      if (shuffleAxis) movement += abs(p.position.x - pp.position.x) * 1.5;
+
+      if (movement > movements[name]) movements[name] = movement;
+
+      // Keep highest-confidence position reading per joint
+      if (!jointConfidence[name] || p.score > jointConfidence[name]) {
+        jointPositions[name]  = { x: screenX, y: screenY };
+        jointConfidence[name] = p.score;
+      }
     }
 
-    p = pose[KEYPOINT_INDICES.leftWrist];
-    pp = prevPose[KEYPOINT_INDICES.leftWrist];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      movements.leftWrist = max(movements.leftWrist, movement);
-    }
-
-    p = pose[KEYPOINT_INDICES.rightShoulder];
-    pp = prevPose[KEYPOINT_INDICES.rightShoulder];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      movements.rightShoulder = max(movements.rightShoulder, movement);
-    }
-
-    p = pose[KEYPOINT_INDICES.leftShoulder];
-    pp = prevPose[KEYPOINT_INDICES.leftShoulder];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      movements.leftShoulder = max(movements.leftShoulder, movement);
-    }
-
-    p = pose[KEYPOINT_INDICES.rightHip];
-    pp = prevPose[KEYPOINT_INDICES.rightHip];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
-      movements.rightHip = max(movements.rightHip, movement + shuffleBonus);
-    }
-
-    p = pose[KEYPOINT_INDICES.leftHip];
-    pp = prevPose[KEYPOINT_INDICES.leftHip];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
-      movements.leftHip = max(movements.leftHip, movement + shuffleBonus);
-    }
-
-    p = pose[KEYPOINT_INDICES.rightKnee];
-    pp = prevPose[KEYPOINT_INDICES.rightKnee];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
-      movements.rightKnee = max(movements.rightKnee, movement + shuffleBonus);
-    }
-
-    p = pose[KEYPOINT_INDICES.leftKnee];
-    pp = prevPose[KEYPOINT_INDICES.leftKnee];
-    if (p && pp && p.score > CONFIDENCE_THRESHOLD) {
-      movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
-      shuffleBonus = abs(p.position.x - pp.position.x) * 1.5;
-      movements.leftKnee = max(movements.leftKnee, movement + shuffleBonus);
-    }
+    processJoint('rightWrist',    KEYPOINT_INDICES.rightWrist,    false);
+    processJoint('leftWrist',     KEYPOINT_INDICES.leftWrist,     false);
+    processJoint('rightShoulder', KEYPOINT_INDICES.rightShoulder, false);
+    processJoint('leftShoulder',  KEYPOINT_INDICES.leftShoulder,  false);
+    processJoint('rightHip',      KEYPOINT_INDICES.rightHip,      true);
+    processJoint('leftHip',       KEYPOINT_INDICES.leftHip,       true);
+    processJoint('rightKnee',     KEYPOINT_INDICES.rightKnee,     true);
+    processJoint('leftKnee',      KEYPOINT_INDICES.leftKnee,      true);
   }
-  
-  for (let ripple of ripples) {
-    let movement = movements[ripple.bodyPart];
 
-    // Optical flow fallback: if PoseNet is struggling (low movement readings),
-    // flowEnergy keeps ripples alive based on raw pixel motion in the frame
+  // Push positions and movement into ripples
+  for (let ripple of ripples) {
+    let part = ripple.bodyPart;
+
+    // Update position target if we got a reading
+    if (jointPositions[part]) {
+      ripple.targetX    = jointPositions[part].x;
+      ripple.targetY    = jointPositions[part].y;
+      ripple.confidence = jointConfidence[part];
+    } else {
+      ripple.confidence *= 0.9; // decay confidence when joint goes missing
+    }
+
+    let movement = movements[part];
     let flowFloor = map(flowEnergy, 0, 1, RIPPLE_MIN, RIPPLE_MIN * 4);
-    
+
     if (movement > MOVEMENT_THRESHOLD) {
       let newSize;
-      
       if (movement < MOVEMENT_GROOVING) {
-        newSize = map(movement, MOVEMENT_THRESHOLD, MOVEMENT_GROOVING, RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MIN * RIPPLE_MEDIUM_MULT);
+        newSize = map(movement, MOVEMENT_THRESHOLD, MOVEMENT_GROOVING,
+                      RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MIN * RIPPLE_MEDIUM_MULT);
       } else {
-        newSize = RIPPLE_MAX;
+        newSize = map(movement, MOVEMENT_GROOVING, MOVEMENT_GROOVING * 3,
+                      RIPPLE_MIN * RIPPLE_MEDIUM_MULT, RIPPLE_MAX);
+        newSize = constrain(newSize, RIPPLE_MIN, RIPPLE_MAX);
       }
-      
-      newSize = constrain(newSize, RIPPLE_MIN, RIPPLE_MAX);
-      
-      if (newSize > ripple.targetRadius) {
-        ripple.targetRadius = newSize;
-      }
+      if (newSize > ripple.targetRadius) ripple.targetRadius = newSize;
     } else {
-      // No confident pose data — use flow energy to keep ripples gently alive
-      if (flowFloor > ripple.targetRadius) {
-        ripple.targetRadius = flowFloor;
-      }
+      if (flowFloor > ripple.targetRadius) ripple.targetRadius = flowFloor;
     }
   }
+
   updateRewardSystem(movements);
 }
+
 
 function drawRipples() {
   blendMode(ADD);
