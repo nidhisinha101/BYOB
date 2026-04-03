@@ -18,15 +18,15 @@ const MIN_SIZE = 2;
 const MAX_SIZE = 150;
 const RIPPLE_MIN = 20;
 const RIPPLE_MAX = 350;
-const MOVEMENT_THRESHOLD = 8;   // ignore micro-movements, fidgeting, nose touches
-const MOVEMENT_GROOVING = 35;   // real dancing threshold — full-arm swings, body shifts
-const RIPPLE_SMALL_MULT = 1.5;  // small movement → modest ripple
-const RIPPLE_MEDIUM_MULT = 4.0;
+const MOVEMENT_THRESHOLD = 7;    // minimum px to register — tuned for passerby sensitivity
+const MOVEMENT_GROOVING = 40;    // threshold for "grooving" reward — needs real dancing
+const RIPPLE_SMALL_MULT = 1.3;
+const RIPPLE_MEDIUM_MULT = 3.5;
 
-const REWARD_SUSTAIN_THRESHOLD = 5;
-const SPARKLE_THRESHOLD = 7;
-const CONFETTI_SPAWN_INTERVAL = 300;
-const SPARKLE_SPAWN_INTERVAL = 300;
+const SPARKLE_THRESHOLD = 5;      // seconds of sustained grooving before sparkles
+const CONFETTI_THRESHOLD = 9;      // seconds before confetti
+const CONFETTI_SPAWN_INTERVAL = 500;
+const SPARKLE_SPAWN_INTERVAL = 400;
 
 const TARGET_FPS = 30;
 
@@ -72,57 +72,82 @@ let lastConfettiSpawn = 0;
 let lastSparkleSpawn = 0;
 let accumulatedGrooveTime = 0;
 
+// Per-joint exponential moving average of movement — smooths out PoseNet jitter
+let smoothedMovements = {
+  rightWrist: 0, leftWrist: 0,
+  rightElbow: 0, leftElbow: 0,
+  rightHip: 0, leftHip: 0,
+  rightKnee: 0, leftKnee: 0,
+  nose: 0, nose2: 0,
+};
+const MOVEMENT_SMOOTH = 0.18; // stable EMA blend — smooth rise and fall
+
+// Activation gate: movement must be sustained for this long before ripples respond
+const ACTIVATION_GATE = 1.0;   // seconds of continuous movement required
+let activationTime = 0;        // how long current movement streak has lasted
+let isActivated = false;       // whether ripples are currently allowed to grow
+
 const BODY_PART_COLORS = {
-  leftShoulder: 0,
-  rightShoulder: 1,
-  leftWrist: 2,
-  rightWrist: 3,
-  leftHip: 4,
-  rightHip: 5,
-  leftKnee: 6,
-  rightKnee: 7,
+  leftWrist:    0,
+  rightWrist:   1,
+  leftElbow:    2,
+  rightElbow:   3,
+  leftHip:      4,
+  rightHip:     5,
+  leftKnee:     6,
+  rightKnee:    7,
+  nose:         8,
+  nose2:        9,
 };
 
 function initializeRipples() {
   ripples = [];
   const bodyParts = [
-    { name: "leftShoulder",  hue: 180, sat: 100 },
-    { name: "rightShoulder", hue: 280, sat: 100 },
-    { name: "leftWrist",     hue: 10,  sat: 100 },
-    { name: "rightWrist",    hue: 340, sat: 100 },
-    { name: "rightHip",      hue: 160, sat: 100 },
-    { name: "leftHip",       hue: 100, sat: 100 },
-    { name: "rightKnee",     hue: 200, sat: 100 },
-    { name: "leftKnee",      hue: 240, sat: 100 },
+    { name: "leftWrist",   hue: 10,  sat: 100 },
+    { name: "rightWrist",  hue: 340, sat: 100 },
+    { name: "leftElbow",   hue: 55,  sat: 100 },
+    { name: "rightElbow",  hue: 300, sat: 100 },
+    { name: "rightHip",    hue: 160, sat: 100 },
+    { name: "leftHip",     hue: 100, sat: 100 },
+    { name: "rightKnee",   hue: 200, sat: 100 },
+    { name: "leftKnee",    hue: 240, sat: 100 },
+    { name: "nose",        hue: 60,  sat: 100 },
+    { name: "nose2",       hue: 20,  sat: 100 },
   ];
 
   for (let part of bodyParts) {
     ripples.push({
-      x: width / 2,
-      y: height / 2,
-      targetX: width / 2,   // where the joint actually is on screen
+      x: random(width * 0.2, width * 0.8),
+      y: random(height * 0.2, height * 0.8),
+      targetX: width / 2,
       targetY: height / 2,
+      vx: random(-0.6, 0.6),   // slow ambient drift velocity
+      vy: random(-0.6, 0.6),
+      orbitRadius: random(60, 160),  // how far from joint center it roams
+      orbitAngle: random(TWO_PI),    // current orbit angle
+      orbitSpeed: random(0.004, 0.010), // orbit angular speed
       currentRadius: RIPPLE_MIN,
       targetRadius: RIPPLE_MIN,
       hue: part.hue,
       saturation: part.sat,
       bodyPart: part.name,
-      confidence: 0,        // last known confidence for this joint
+      confidence: 0,
     });
   }
 }
 
 function initializeColors() {
   rippleColors = [
-    { stroke1: color(190, 100, 55, 200), stroke2: color(190, 100, 70, 130), stroke3: color(190, 100, 85, 80) },
-    { stroke1: color(320, 100, 55, 200), stroke2: color(320, 100, 70, 130), stroke3: color(320, 100, 85, 80) },
-    { stroke1: color(340, 100, 55, 200), stroke2: color(340, 100, 70, 130), stroke3: color(340, 100, 85, 80) },
-    { stroke1: color(10, 100, 55, 200), stroke2: color(10, 100, 70, 130), stroke3: color(10, 100, 85, 80) },
-    { stroke1: color(45, 100, 55, 200), stroke2: color(45, 100, 70, 130), stroke3: color(45, 100, 85, 80) },
-    { stroke1: color(280, 100, 55, 200), stroke2: color(280, 100, 70, 130), stroke3: color(280, 100, 85, 80) },
-    { stroke1: color(180, 100, 55, 200), stroke2: color(180, 100, 70, 130), stroke3: color(180, 100, 85, 80) },
-    { stroke1: color(160, 100, 55, 200), stroke2: color(160, 100, 70, 130), stroke3: color(160, 100, 85, 80) },
-    { stroke1: color(100, 100, 55, 200), stroke2: color(100, 100, 70, 130), stroke3: color(100, 100, 85, 80) },
+    { stroke1: color(10,  100, 55, 200), stroke2: color(10,  100, 70, 130), stroke3: color(10,  100, 85, 80) }, // 0 leftWrist
+    { stroke1: color(340, 100, 55, 200), stroke2: color(340, 100, 70, 130), stroke3: color(340, 100, 85, 80) }, // 1 rightWrist
+    { stroke1: color(55,  100, 55, 200), stroke2: color(55,  100, 70, 130), stroke3: color(55,  100, 85, 80) }, // 2 leftElbow
+    { stroke1: color(300, 100, 55, 200), stroke2: color(300, 100, 70, 130), stroke3: color(300, 100, 85, 80) }, // 3 rightElbow
+    { stroke1: color(100, 100, 55, 200), stroke2: color(100, 100, 70, 130), stroke3: color(100, 100, 85, 80) }, // 4 leftHip
+    { stroke1: color(160, 100, 55, 200), stroke2: color(160, 100, 70, 130), stroke3: color(160, 100, 85, 80) }, // 5 rightHip
+    { stroke1: color(240, 100, 55, 200), stroke2: color(240, 100, 70, 130), stroke3: color(240, 100, 85, 80) }, // 6 leftKnee
+    { stroke1: color(200, 100, 55, 200), stroke2: color(200, 100, 70, 130), stroke3: color(200, 100, 85, 80) }, // 7 rightKnee
+    { stroke1: color(60,  100, 55, 200), stroke2: color(60,  100, 70, 130), stroke3: color(60,  100, 85, 80) }, // 8 nose
+    { stroke1: color(20,  100, 55, 200), stroke2: color(20,  100, 70, 130), stroke3: color(20,  100, 85, 80) }, // 9 nose2
   ];
   vignetteAlpha = color(10, 5, 20);
 }
@@ -142,6 +167,9 @@ function setup() {
     videoSmall.hide();
     
     videoAspect = 640 / 480;
+
+    // Pre-compute video-to-canvas mapping so it's valid before first video frame arrives
+    computeVideoTransform();
 
     // Offscreen canvas for optical flow pixel diffing
     flowCanvas = document.createElement('canvas');
@@ -249,38 +277,36 @@ function cleanupMemory() {
     }
 }
 
-function draw() {
-    background(5, 2, 15);
-    
-    if (video.width > 0 && video.height > 0) {
-        let canvasAspect = width / height;
-        let drawW, drawH, drawX, drawY;
-        
-        if (videoAspect > canvasAspect) {
-            drawW = width;
-            drawH = width / videoAspect;
-            drawX = 0;
-            drawY = (height - drawH) / 2;
-        } else {
-            drawH = height;
-            drawW = height * videoAspect;
-            drawX = (width - drawW) / 2;
-            drawY = 0;
-        }
-        
-        videoOffsetX = drawX;
-        videoOffsetY = drawY;
-        videoScaleX = drawW / video.width;
-        videoScaleY = drawH / video.height;
-        
-        image(video, drawX, drawY, drawW, drawH);
-        
-        blendMode(MULTIPLY);
-        noStroke();
-        fill(270, 70, 30);
-        rect(drawX, drawY, drawW, drawH);
-        blendMode(BLEND);
+function computeVideoTransform() {
+    // Use actual video dimensions if available, fall back to known capture size
+    let vw = (video && video.width > 0) ? video.width : 640;
+    let vh = (video && video.height > 0) ? video.height : 480;
+    let canvasAspect = width / height;
+    let drawW, drawH, drawX, drawY;
+
+    if (videoAspect > canvasAspect) {
+        drawW = width;
+        drawH = width / videoAspect;
+        drawX = 0;
+        drawY = (height - drawH) / 2;
+    } else {
+        drawH = height;
+        drawW = height * videoAspect;
+        drawX = (width - drawW) / 2;
+        drawY = 0;
     }
+
+    videoOffsetX = drawX;
+    videoOffsetY = drawY;
+    videoScaleX  = drawW / vw;
+    videoScaleY  = drawH / vh;
+}
+
+function draw() {
+    background(0); // pure black
+
+    // Recompute every frame so resize/video-ready changes are picked up
+    computeVideoTransform();
     
     drawVignette();
     computeOpticalFlow();
@@ -308,37 +334,44 @@ function drawVignette() {
 }
 
 function updateRipples() {
-  // Compute centroid of visible joints for lost-joint fallback
-  let centroidX = width / 2, centroidY = height * 0.45;
-  let confidentCount = 0;
-  for (let r of ripples) {
-    if (r.confidence > 0.25) {
-      centroidX += r.targetX;
-      centroidY += r.targetY;
-      confidentCount++;
-    }
-  }
-  if (confidentCount > 0) {
-    centroidX /= confidentCount + 1;
-    centroidY /= confidentCount + 1;
-  }
+  const margin = 60;
 
   for (let ripple of ripples) {
-    // Hard visibility cutoff — below this, the ripple is effectively hidden
-    ripple.visible = ripple.confidence > 0.15;
+    // Visibility: needs confidence AND some movement
+    let partMovement = smoothedMovements[ripple.bodyPart] || 0;
+    ripple.visible = ripple.confidence > 0.15 && partMovement > (MOVEMENT_THRESHOLD * 0.5);
+
+    // Advance orbit angle — each ripple slowly circles around a point biased
+    // upward and toward center so they spread across the screen, not sink to bottom
+    ripple.orbitAngle += ripple.orbitSpeed;
+    let anchorX = lerp(ripple.targetX, width  * 0.5, 0.35);
+    let anchorY = lerp(ripple.targetY, height * 0.38, 0.45); // pull toward upper-center
+    let homeX = anchorX + cos(ripple.orbitAngle) * ripple.orbitRadius;
+    let homeY = anchorY + sin(ripple.orbitAngle) * ripple.orbitRadius;
 
     if (ripple.visible) {
-      let posLerp = map(ripple.confidence, 0.15, 1, 0.06, 0.22);
-      ripple.x = lerp(ripple.x, ripple.targetX, posLerp);
-      ripple.y = lerp(ripple.y, ripple.targetY, posLerp);
+      // Loosely attracted toward orbit home — drifty, not snapping
+      ripple.vx += (homeX - ripple.x) * 0.003;
+      ripple.vy += (homeY - ripple.y) * 0.003;
     } else {
-      // Pull quickly to centroid so if it becomes visible again it's near the body
-      ripple.x = lerp(ripple.x, centroidX, 0.12);
-      ripple.y = lerp(ripple.y, centroidY, 0.12);
-      // Collapse radius to zero so it won't pop large when joint reappears
+      // Joint lost/still — drift freely with gentle screen-center pull
+      ripple.vx += (width / 2 - ripple.x) * 0.0005;
+      ripple.vy += (height / 2 - ripple.y) * 0.0005;
       ripple.targetRadius = RIPPLE_MIN;
-      ripple.currentRadius = lerp(ripple.currentRadius, 0, 0.15);
+      ripple.currentRadius = lerp(ripple.currentRadius, 0, 0.08);
     }
+
+    // Dampen and apply velocity
+    ripple.vx *= 0.96;
+    ripple.vy *= 0.96;
+    ripple.x += ripple.vx;
+    ripple.y += ripple.vy;
+
+    // Soft wall repulsion
+    if (ripple.x < margin)          ripple.vx += 0.5;
+    if (ripple.x > width  - margin) ripple.vx -= 0.5;
+    if (ripple.y < margin)          ripple.vy += 0.5;
+    if (ripple.y > height - margin) ripple.vy -= 0.5;
 
     if (ripple.visible) {
       let pulse = sin(frameCount * 0.04 + ripple.hue * 0.05) * 3;
@@ -348,26 +381,26 @@ function updateRipples() {
     }
   }
 }
-
 function updateMovement() {
-  if (pastPoses.length < 5) return;
+  if (pastPoses.length < 8) return;
 
   let currentFrame = pastPoses[pastPoses.length - 1];
-  let compareFrame = pastPoses[max(0, pastPoses.length - 3)];
+  // Compare further back: more signal over jitter for slow/still detection
+  let compareFrame = pastPoses[max(0, pastPoses.length - 6)];
 
-  if (!currentFrame || !compareFrame || currentFrame.people.length === 0) return;
+  if (!currentFrame || !compareFrame || currentFrame.people.length === 0) {
+    // No person detected — decay all smoothed movements toward zero
+    for (let k in smoothedMovements) smoothedMovements[k] *= 0.8;
+    return;
+  }
 
-  let CONFIDENCE_THRESHOLD = 0.25;
+  const CONFIDENCE_THRESHOLD = 0.3;
 
-  // movements: pixel distance traveled since compareFrame
-  let movements = {
-    rightWrist: 0, leftWrist: 0,
-    rightShoulder: 0, leftShoulder: 0,
-    rightHip: 0, leftHip: 0,
-    rightKnee: 0, leftKnee: 0,
-  };
+  // Use sums + counts per joint so we can average across all detected people.
+  // This means one hyperactive person can't carry the group — everyone needs to move.
+  let movementSums   = { rightWrist: 0, leftWrist: 0, rightElbow: 0, leftElbow: 0, rightHip: 0, leftHip: 0, rightKnee: 0, leftKnee: 0, nose: 0, nose2: 0 };
+  let movementCounts = { rightWrist: 0, leftWrist: 0, rightElbow: 0, leftElbow: 0, rightHip: 0, leftHip: 0, rightKnee: 0, leftKnee: 0, nose: 0, nose2: 0 };
 
-  // jointPositions: best screen-space position for each joint this frame
   let jointPositions = {};
   let jointConfidence = {};
 
@@ -382,67 +415,94 @@ function updateMovement() {
     function processJoint(name, idx, shuffleAxis) {
       let p  = pose[idx];
       let pp = prevPose[idx];
-      if (!p || !pp || p.score < CONFIDENCE_THRESHOLD) return;
+      if (!p || !pp || p.score < CONFIDENCE_THRESHOLD || pp.score < CONFIDENCE_THRESHOLD) return;
 
-      // Keypoints come from the 320x240 videoSmall, scaled *2 in the pose handler = 640x480 space.
-      // The video is CSS-mirrored, so we flip x relative to the 640 width.
       let rawX = 640 - p.position.x;
       let rawY = p.position.y;
-
-      // Map from video space to canvas space using the offsets computed in draw()
       let screenX = videoOffsetX + rawX * videoScaleX;
       let screenY = videoOffsetY + rawY * videoScaleY;
 
       let movement = dist(p.position.x, p.position.y, pp.position.x, pp.position.y);
       if (shuffleAxis) movement += abs(p.position.x - pp.position.x) * 1.5;
 
-      if (movement > movements[name]) movements[name] = movement;
+      movementSums[name]   += movement;
+      movementCounts[name] += 1;
 
-      // Keep highest-confidence position reading per joint
       if (!jointConfidence[name] || p.score > jointConfidence[name]) {
         jointPositions[name]  = { x: screenX, y: screenY };
         jointConfidence[name] = p.score;
       }
     }
 
-    processJoint('rightWrist',    KEYPOINT_INDICES.rightWrist,    false);
-    processJoint('leftWrist',     KEYPOINT_INDICES.leftWrist,     false);
-    processJoint('rightShoulder', KEYPOINT_INDICES.rightShoulder, false);
-    processJoint('leftShoulder',  KEYPOINT_INDICES.leftShoulder,  false);
-    processJoint('rightHip',      KEYPOINT_INDICES.rightHip,      true);
-    processJoint('leftHip',       KEYPOINT_INDICES.leftHip,       true);
-    processJoint('rightKnee',     KEYPOINT_INDICES.rightKnee,     true);
-    processJoint('leftKnee',      KEYPOINT_INDICES.leftKnee,      true);
+    processJoint('rightWrist',  KEYPOINT_INDICES.rightWrist,  false);
+    processJoint('leftWrist',   KEYPOINT_INDICES.leftWrist,   false);
+    processJoint('rightElbow',  KEYPOINT_INDICES.rightElbow,  false);
+    processJoint('leftElbow',   KEYPOINT_INDICES.leftElbow,   false);
+    processJoint('rightHip',    KEYPOINT_INDICES.rightHip,    true);
+    processJoint('leftHip',     KEYPOINT_INDICES.leftHip,     true);
+    processJoint('rightKnee',   KEYPOINT_INDICES.rightKnee,   true);
+    processJoint('leftKnee',    KEYPOINT_INDICES.leftKnee,    true);
+    processJoint('nose',        KEYPOINT_INDICES.nose,        false);
+    processJoint('nose2',       KEYPOINT_INDICES.nose,        false); // second ripple on same point
   }
 
-  // Push positions and movement into ripples
+  // Average per joint — scales naturally with crowd size
+  let rawMovements = {};
+  for (let k in movementSums) {
+    rawMovements[k] = movementCounts[k] > 0 ? movementSums[k] / movementCounts[k] : 0;
+  }
+
+  // Simple EMA — stable, no oscillation
+  for (let k in smoothedMovements) {
+    smoothedMovements[k] = lerp(smoothedMovements[k], rawMovements[k], MOVEMENT_SMOOTH);
+  }
+
+  // Update activation gate — requires sustained movement before ripples respond
+  let anyMovement = false;
+  for (let k in smoothedMovements) {
+    if (smoothedMovements[k] > MOVEMENT_THRESHOLD) { anyMovement = true; break; }
+  }
+
+  if (anyMovement) {
+    activationTime += 1 / TARGET_FPS;
+    if (activationTime >= ACTIVATION_GATE) isActivated = true;
+  } else {
+    // Reset gate immediately when movement stops — no lingering activation
+    activationTime = 0;
+    isActivated = false;
+  }
+
+  // Push into ripples
   for (let ripple of ripples) {
     let part = ripple.bodyPart;
 
-    // Update position target if we got a reading
     if (jointPositions[part]) {
       ripple.targetX    = jointPositions[part].x;
       ripple.targetY    = jointPositions[part].y;
       ripple.confidence = jointConfidence[part];
     } else {
-      ripple.confidence *= 0.75; // fast decay: joint gone for ~10 frames = invisible
+      ripple.confidence *= 0.75;
     }
 
-    let movement = movements[part];
+    let movement = smoothedMovements[part];
 
-    if (movement > MOVEMENT_THRESHOLD) {
-      // Exponential curve: small movements stay small, big dancing moves explode
-      // Normalize 0–1 across the full range then square it for non-linearity
-      let t = constrain((movement - MOVEMENT_THRESHOLD) / (MOVEMENT_GROOVING * 3 - MOVEMENT_THRESHOLD), 0, 1);
-      let tCurved = t * t * t; // cubic — tiny moves barely register, full-body = huge
+    // Legs/hips need less movement to register — harder to move, deserves more reward
+    let isLeg = (part === 'rightKnee' || part === 'leftKnee' || part === 'rightHip' || part === 'leftHip');
+    let threshold = isLeg ? MOVEMENT_THRESHOLD * 0.45 : MOVEMENT_THRESHOLD;
+    let grooving  = isLeg ? MOVEMENT_GROOVING  * 0.45 : MOVEMENT_GROOVING;
+
+    if (isActivated && movement > threshold) {
+      let t = constrain((movement - threshold) / (grooving * 3 - threshold), 0, 1);
+      let tCurved = t * t * t;
       let newSize = map(tCurved, 0, 1, RIPPLE_MIN * RIPPLE_SMALL_MULT, RIPPLE_MAX);
-
       if (newSize > ripple.targetRadius) ripple.targetRadius = newSize;
+    } else {
+      let stillness = 1 - constrain(movement / threshold, 0, 1);
+      ripple.targetRadius = lerp(ripple.targetRadius, RIPPLE_MIN, 0.04 * stillness);
     }
-    // No flow-based growth when still — prevents noise triggering ripples unprompted
   }
 
-  updateRewardSystem(movements);
+  updateRewardSystem(smoothedMovements);
 }
 
 
@@ -514,28 +574,30 @@ function updateRewardSystem(movements) {
     rewardState.rewardType = 'grooving';
     spawnRewardEffects();
   } else {
-    accumulatedGrooveTime = 0;
+    // Decay groove time slowly so brief pauses don't reset the reward
+    accumulatedGrooveTime = max(0, accumulatedGrooveTime - (2 / TARGET_FPS));
     rewardState.rewardTriggered = false;
     rewardState.rewardType = null;
-    confetti = [];
-    sparkleBursts = [];
+    // Don't instantly wipe effects — let confetti/sparkles finish their natural lifetime
   }
 }
 
 function spawnRewardEffects() {
   let now = millis();
-  
-  if (accumulatedGrooveTime >= REWARD_SUSTAIN_THRESHOLD) {
-    if (now - lastConfettiSpawn > CONFETTI_SPAWN_INTERVAL) {
-      spawnConfetti(4);
-      lastConfettiSpawn = now;
-    }
-  }
-  
+
+  // Sparkles = first reward at 8s
   if (accumulatedGrooveTime >= SPARKLE_THRESHOLD) {
     if (now - lastSparkleSpawn > SPARKLE_SPAWN_INTERVAL) {
       spawnSparkleBurst();
       lastSparkleSpawn = now;
+    }
+  }
+
+  // Confetti = second reward at 12s
+  if (accumulatedGrooveTime >= CONFETTI_THRESHOLD) {
+    if (now - lastConfettiSpawn > CONFETTI_SPAWN_INTERVAL) {
+      spawnConfetti(12);  // more pieces for bigger impact
+      lastConfettiSpawn = now;
     }
   }
 }
