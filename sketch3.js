@@ -304,9 +304,6 @@ function computeVideoTransform() {
 
 function draw() {
     background(0); // pure black
-    fill("green"); 
-    fontSize(100);
-    text("DANCE OR DIE", width/2, 64);
 
     // Recompute every frame so resize/video-ready changes are picked up
     computeVideoTransform();
